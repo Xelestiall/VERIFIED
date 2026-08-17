@@ -1,0 +1,30 @@
+# --- Secret: jangan pernah masuk repo ---
+.env
+.env.local
+*.json.key
+service-account*.json
+
+# --- Data & artefak run ---
+# PDF sumber berukuran ratusan MB dan bukan milik repo ini.
+data/pdf/
+# Index FAISS di-rebuild dari PDF, tidak perlu diversikan.
+data/indexes/
+# Hasil eksperimen: manifest.csv & run_log.csv dibuat ulang tiap run.
+results/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+
+# --- Editor & OS ---
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+
+# --- Claude Code local settings ---
+.claude/settings.local.json
