@@ -22,7 +22,6 @@ from dotenv import load_dotenv
 load_dotenv(override=True)   # .env selalu menang → ganti key cukup restart, tak ada key basi
 HOST_ANTHROPIC = os.getenv("ANTHROPIC_API_KEY", "")
 HOST_VOYAGE = os.getenv("VOYAGE_API_KEY", "")
-APP_PASSWORD = os.getenv("APP_PASSWORD", "")
 
 from typing import Dict, List
 st.set_page_config(page_title="VERIFIED Framework", page_icon="🔍", layout="wide")
