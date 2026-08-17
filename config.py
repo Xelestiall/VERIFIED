@@ -1,27 +1,16 @@
-"""
-config.py — Semua knob VERIFIED ada di sini.
-
-Filosofi: JANGAN hardcode apapun di file layer. Semua angka, threshold,
-model name, dan pattern yang mungkin lo tune untuk eksperimen tesis
-harus hidup di file ini, biar tiap perubahan eksperimen = 1 commit yang
-jelas dan bisa lo tulis di Bab 4 sebagai "parameter setting".
-"""
-
 import os
 from dataclasses import dataclass, field
 from typing import Dict, List
 
 # ==========================================================
 # 1. API KEYS
-# Anthropic  -> generation (console.anthropic.com, butuh prepaid credits)
+# Anthropic  -> generation (API uses prepaid credits)
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-# Voyage AI  -> embedding, Anthropic tidak punya embedding model sendiri.
+# Voyage AI  -> embedding model
 VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY", "")
 
-
 def get_api_key(name: str, override: str = "") -> str:
-    """Resolusi API key: argumen override > environment variable > default modul (kosong).
-    Dibaca saat runtime supaya .env yang di-load setelah import tetap terpakai."""
+    """Bisa dioverride, tetapi default menggunakan .env via secret streamlit import tetap terpakai."""
     if override:
         return override
     val = os.getenv(name, "")
@@ -32,7 +21,6 @@ def get_api_key(name: str, override: str = "") -> str:
 
 # ==========================================================
 # 2. MODEL
-# ==========================================================
 @dataclass
 class ModelConfig:
     # Model used: sonnet-5 (considered balance dibanding OPUS)
@@ -44,7 +32,7 @@ class ModelConfig:
     # Model untuk DEBATE di Layer 3
     critic_model: str = "claude-sonnet-4-6"
 
-    max_tokens: int = 2000
+    max_tokens: int = 10000
 
     # temperature -> uji stabilitas output (variance analysis).
     temperature: float = 0.0
@@ -73,7 +61,7 @@ class RetrievalConfig:
         default_factory=lambda: ["\n\n", "\n", ". ", " ", ""]
     )
 
-    # voyage-finance-2 = domain-specific finance (rekomendasi Anthropic)
+    # voyage-finance-2 = domain-specific finance
     embedding_model: str = "voyage-finance-2"
     embedding_batch_size: int = 64
 
@@ -191,28 +179,30 @@ class SociotechnicalConfig:
 # 7. EKSPERIMEN
 # ==========================================================
 # 8 pertanyaan dari Tabel 3.2 tesis (adopsi Spörer, 2025).
-# risk = level risiko awal; bisa dinaikkan otomatis oleh Layer 4.
 EVAL_QUESTIONS: List[Dict[str, str]] = [
-    {"id": "Q1", "risk": "high",
-     "text": "Apa saja angka dan metrik keuangan utama yang disebutkan dalam laporan ini?"},
-    {"id": "Q2", "risk": "high",
-     "text": "Informasi apa yang diberikan mengenai arus kas perusahaan? Apakah arus kas perusahaan positif atau negatif pada akhir tahun buku laporan ini?"},
-    {"id": "Q3", "risk": "medium",
-     "text": "Apakah laporan menyebut dampak volatilitas kurs Rupiah/USD atau kenaikan biaya energi terhadap arus kas atau modal kerja?"},
-    {"id": "Q4", "risk": "low",
-     "text": "Segmen bisnis atau divisi apa saja yang disebutkan di laporan, dan apakah ada lini bisnis baru yang diumumkan?"},
-    {"id": "Q5", "risk": "medium",
-     "text": "Apakah perusahaan menyebut strategi mitigasi risiko nilai tukar atau biaya energi dalam rencana jangka pendek-menengah?"},
-    {"id": "Q6", "risk": "low",
-     "text": "Apa saja bisnis yang dimiliki di bawah perusahaan terkait dan bergerak di bidang apa saja?"},
-    {"id": "Q7", "risk": "high",
-     "text": "Apakah perusahaan sudah membagi dividen pada tahun terkait, dan berapa nominal yang didistribusikan bagi pemegang saham?"},
-    {"id": "Q8", "risk": "medium",
-     "text": "Apakah perusahaan menyebutkan komitmennya dalam ESG secara spesifik dalam laporan tahunan? Sertakan angka kuantitatif yang ditetapkan apabila ada."},
+    {"id": "Q1",
+     "text": "Metrik keuangan apa yang digunkan untuk mengukur laba perusahaan [nama perusahaan] di laporan keuangan tahun 2025?"},
+    {"id": "Q2",
+     "text": "Bagaimana cashflow perusahaan [nama perusahaan] pada akhir buku tahun 2025, positif atau negatif?"},
+    {"id": "Q3",
+     "text": "Berapa revenue perusahaan [nama perusahaan] pada tahun 2025?"},
+    {"id": "Q4",
+     "text": "Apa segmen bisnis yang ada di laporan [nama perusahaan] tahun 2025?"},
+    {"id": "Q5",
+     "text": "Apa bentuk legal perusahaan [nama perusahaan] pada laporan keuangan tahun 2025?"},
+    {"id": "Q6",
+     "text": "Sebutkan anak perusahaan yang ada dibawah perusahaan [nama perusahaan] "},
+    {"id": "Q7",
+     "text": "Berapa nominal yang didistribusikan [nama perusahaan] bagi para pemegang saham atau investor pada tahun 2025?"},
+    {"id": "Q8",
+     "text": "Bagaimana perusahaan [nama perusahaan] berkomitmen dalam partisipasi ESG (Environmental, Social, Governance) secara spesifik dalam laporan tahunan? Sertakan angka kuantitatif yang ditetapkan apabila ada"},
+    {"id": "Q9",
+     "text": "Apakah revenue perusahaan [nama perusahaan] mengalami peningkatan atau penurunan dari tahun sebelumnya?"},
+    {"id": "Q10",
+     "text": "Sebutkan target harga saham [nama perusahaan] yang tertera pada laporan 2025"}
 ]
 
 SCENARIOS = ["vanilla", "standard_rag", "verified"]
-
 RESULTS_DIR = "./results"
 LOG_FILE = "./results/run_log.csv"
 

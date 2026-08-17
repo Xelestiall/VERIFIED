@@ -5,19 +5,16 @@ evaluation.py — Perhitungan metrik sesuai Tabel 3.1 tesis.
   Context Efficiency -> Token count per respons/sesi
   Hallucination Rate -> HR = (respons mengandung kesalahan faktual / total) x 100%
 
-CATATAN PENTING soal hallucination rate: ini metrik yang butuh
-ANOTASI MANUSIA. Skrip di bawah menghitungnya dari kolom
-`is_hallucination` yang lo isi manual di CSV.
-
-python evaluation.py --csv results/run_log.csv
+Hallucination rate: ini metrik yang butuh menghitung `is_hallucination` yang diisi evaluator secara manual.
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import os
 import pandas as pd
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 # ----------------------------------------------------------
 # Logging untuk evaluasi model Context Engineering compared with standard RAG dan Vanila LLM
@@ -154,7 +151,7 @@ def traceability_analysis(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ----------------------------------------------------------
-# Layer 4 — beban kerja manusia
+# Layer 4 — Sociotechnical
 # ----------------------------------------------------------
 def human_trigger_analysis(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -174,6 +171,179 @@ def human_trigger_analysis(df: pd.DataFrame) -> pd.DataFrame:
     ).reset_index()
     out["escalation_pct"] = (out["n_escalated"] / out["n"] * 100).round(2)
     out["avg_confidence"] = out["avg_confidence"].round(3)
+    return out
+
+
+# ----------------------------------------------------------
+# External judge confidence (Opsi B)
+# ----------------------------------------------------------
+# PipelineResult.confidence di run_log.csv SENGAJA 0.0 untuk Standard RAG
+# & Vanilla LLM (lihat pipeline.py) -- itu bukan bug, itu bukti bahwa
+# baseline tidak punya mekanisme self-assessment. Salah satu novelty claim
+# VERIFIED (lihat docstring app.py: "Kalau sistem ragu, dia BILANG ragu")
+# justru bergantung pada baseline TIDAK bisa melakukan itu.
+#
+# Fungsi di bawah TIDAK mengubah confidence bawaan itu. Ia menjalankan
+# SCORER_SYSTEM yang identik (dari layer3_verification.py) SEKALI secara
+# post-hoc ke jawaban ketiga skenario, sebagai "external judge" yang
+# terpisah dari pipeline produksi -- supaya confidence bisa dibandingkan
+# apples-to-apples di bab evaluasi tanpa merusak temuan aslinya:
+#   - verified      -> dinilai terhadap context Layer 2 (sudah terkurasi)
+#   - standard_rag  -> dinilai terhadap raw top-k chunk (retrieved_chunks)
+#   - vanilla       -> dinilai TANPA sumber sama sekali -> wajar kalau
+#                      judged_confidence-nya rendah, itu memang temuan H1
+JUDGE_CSV_FIELDS = [
+    "doc_id", "scenario", "question_id", "judged_confidence", "judged_reasoning",
+]
+
+
+class JudgeLogger:
+    """Pola sama dengan ResultLogger (runner.py): append per-baris + resume,
+    supaya penilaian 720 respons tidak hilang kalau kepotong di tengah."""
+
+    def __init__(self, path: str):
+        self.path = path
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        if not os.path.exists(path):
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                csv.DictWriter(f, fieldnames=JUDGE_CSV_FIELDS).writeheader()
+
+    def write(self, row: Dict[str, Any]) -> None:
+        with open(self.path, "a", newline="", encoding="utf-8") as f:
+            csv.DictWriter(f, fieldnames=JUDGE_CSV_FIELDS).writerow(
+                {k: row.get(k, "") for k in JUDGE_CSV_FIELDS}
+            )
+
+    def completed_keys(self) -> Set[str]:
+        if not os.path.exists(self.path):
+            return set()
+        done: Set[str] = set()
+        with open(self.path, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                done.add(f"{row['doc_id']}|{row['scenario']}|{row['question_id']}")
+        return done
+
+
+def load_chunk_lookup(doc_id: str) -> Dict[str, str]:
+    """Baca teks chunk dari cache pickle Layer 1 (RETRIEVAL.index_dir).
+
+    Sengaja TIDAK memanggil retriever.build() -- itu akan re-embed via
+    Voyage API. Index/pickle-nya sudah ada di disk dari run pertama
+    (app.py / runner.py), jadi cukup di-load langsung, gratis.
+    """
+    import pickle
+    from config import RETRIEVAL
+
+    meta_path = os.path.join(RETRIEVAL.index_dir, f"{doc_id}_chunks.pkl")
+    if not os.path.exists(meta_path):
+        return {}
+    with open(meta_path, "rb") as f:
+        chunks = pickle.load(f)
+    return {c.chunk_id: c.text for c in chunks}
+
+
+def _context_for_row(row: "pd.Series", cache: Dict[str, Dict[str, str]]) -> str:
+    """Rakit ulang blok <SUMBER> persis seperti yang dilihat sistem asal,
+    dari kolom `retrieved_chunks` (id) + chunk text dari disk."""
+    doc_id = str(row.get("doc_id", ""))
+    if row.get("scenario") == "vanilla" or not doc_id:
+        return ""  # Vanilla memang tidak pernah diberi sumber apa pun.
+    ids = [c.strip() for c in str(row.get("retrieved_chunks", "")).split(";") if c.strip()]
+    if not ids:
+        return ""
+    lookup = cache.setdefault(doc_id, load_chunk_lookup(doc_id))
+    return "\n\n".join(
+        f'<SUMBER id="{cid}">\n{lookup[cid]}\n</SUMBER>'
+        for cid in ids if cid in lookup
+    )
+
+
+def run_judge_confidence(
+    csv_path: str,
+    out_path: str = "./results/judged_confidence.csv",
+    resume: bool = True,
+    limit: Optional[int] = None,
+) -> pd.DataFrame:
+    """
+    Jalankan Opsi B untuk SEMUA baris di run_log.csv (ketiga skenario),
+    tulis ke CSV TERPISAH (default results/judged_confidence.csv) lewat
+    JudgeLogger, lalu kembalikan hasil join-nya. run_log.csv (arsip utama,
+    dibaca ulang oleh runner.py --resume) TIDAK disentuh sama sekali.
+
+    Pakai:
+        python evaluation.py --csv results/run_log.csv --judge-confidence
+        python evaluation.py --judge-confidence --judge-limit 20   # pilot
+    """
+    from llm import LLMClient
+    from layer3_verification import SCORER_SYSTEM
+
+    df = load_results(csv_path)
+    logger = JudgeLogger(out_path)
+    done = logger.completed_keys() if resume else set()
+
+    llm = LLMClient()
+    chunk_cache: Dict[str, Dict[str, str]] = {}
+    n_judged = 0
+
+    for _, row in df.iterrows():
+        key = f"{row['doc_id']}|{row['scenario']}|{row['question_id']}"
+        if key in done:
+            continue
+        if limit and n_judged >= limit:
+            break
+
+        context = _context_for_row(row, chunk_cache)
+        scored = llm.complete_json(
+            f"PERTANYAAN:\n{row['question']}\n\n"
+            f"SUMBER:\n{context or '(tidak ada sumber diberikan ke sistem ini)'}\n\n"
+            f"JAWABAN YANG DINILAI:\n{row['answer']}\n\n"
+            'Nilai jawaban. Format: {"confidence":0.0-1.0,'
+            '"supported_claims":["..."],"unsupported_claims":["..."],'
+            '"reasoning":"ringkas, maksimal 2 kalimat"}',
+            system=SCORER_SYSTEM,
+            stage="judge_post_hoc",
+            fallback={"confidence": 0.0, "reasoning": "parse_error"},
+        )
+        logger.write({
+            "doc_id": row["doc_id"], "scenario": row["scenario"],
+            "question_id": row["question_id"],
+            "judged_confidence": round(float(scored.get("confidence", 0.0)), 3),
+            "judged_reasoning": scored.get("reasoning", ""),
+        })
+        n_judged += 1
+        print(f"  [judge] {key} -> {float(scored.get('confidence', 0.0)):.2f}")
+
+    print(f"\nJudge selesai: {n_judged} baris baru dinilai. "
+          f"Biaya sesi ini: ${llm.ledger.cost_usd():.4f}")
+
+    judged_df = pd.read_csv(out_path)
+    return df.merge(
+        judged_df[["doc_id", "scenario", "question_id",
+                    "judged_confidence", "judged_reasoning"]],
+        on=["doc_id", "scenario", "question_id"], how="left",
+    )
+
+
+def confidence_calibration(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Bandingkan confidence bawaan sistem (`confidence`, cuma bermakna utk
+    VERIFIED) dengan `judged_confidence` (seragam 3 skenario, dari
+    run_judge_confidence). Perlu di-merge dulu -- lihat run_judge_confidence().
+    """
+    if "judged_confidence" not in df.columns:
+        raise ValueError(
+            "Kolom judged_confidence belum ada -- jalankan run_judge_confidence() dulu."
+        )
+    out = df.groupby("scenario").agg(
+        n=("judged_confidence", "size"),
+        avg_self_confidence=("confidence", "mean"),
+        avg_judged_confidence=("judged_confidence", "mean"),
+    ).round(3).reset_index()
+    out["note"] = out["scenario"].map({
+        "verified": "self-assessment asli (Scorer/Critic/Commander)",
+        "standard_rag": "confidence=0.0 by design; judged = external judge",
+        "vanilla": "confidence=0.0 by design; judged = external judge tanpa sumber",
+    })
     return out
 
 
@@ -267,12 +437,32 @@ def main() -> None:
     p.add_argument("--csv", default="./results/run_log.csv")
     p.add_argument("--out", default="./results")
     p.add_argument("--ragas", action="store_true", help="jalankan RAGAS (butuh biaya API)")
+    p.add_argument(
+        "--judge-confidence", action="store_true",
+        help="Opsi B: nilai SEMUA jawaban (3 skenario) pakai Scorer prompt "
+             "yang sama, post-hoc (butuh biaya API, 1 call/baris). Tidak "
+             "mengubah confidence bawaan di run_log.csv.",
+    )
+    p.add_argument(
+        "--judge-limit", type=int, default=None,
+        help="batasi jumlah baris baru yang dinilai per run --judge-confidence (buat pilot)",
+    )
+    p.add_argument("--judge-out", default="./results/judged_confidence.csv")
     args = p.parse_args()
 
     full_report(args.csv, args.out)
     if args.ragas:
         print("\n[RAGAS] Butuh chunk_lookup + ground_truth. "
               "Lihat build_ragas_dataset() dan panggil dari notebook.")
+
+    if args.judge_confidence:
+        print(f"\n{'=' * 60}\nJUDGE CONFIDENCE (Opsi B)\n{'=' * 60}")
+        judged = run_judge_confidence(
+            args.csv, out_path=args.judge_out, limit=args.judge_limit,
+        )
+        calib = confidence_calibration(judged)
+        print(calib.to_string())
+        calib.to_csv(os.path.join(args.out, "metric_confidence_calibration.csv"), index=False)
 
 
 if __name__ == "__main__":

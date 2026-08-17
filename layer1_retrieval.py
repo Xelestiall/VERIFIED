@@ -1,19 +1,12 @@
 """
-layer1_retrieval.py — LAYER 1: RETRIEVAL
-
-Tugas layer ini cuma satu: pastikan jawaban berbasis dokumen aktual,
-bukan parametric memory. PDF -> chunk -> embedding -> vector store.
+LAYER 1: Memastikan jawaban berbasis dokumen aktual, bukan parametric memory. 
+PDF -> chunk -> embedding -> vector store.
 
 Stack:
   LangChain  -> loader, splitter, vector store (sesuai Bab 3 tesis)
   Voyage AI  -> embedding (voyage-finance-2, domain keuangan).
-                Anthropic tidak menyediakan embedding model sendiri.
   FAISS      -> vector store lokal, gratis, bisa di-persist ke disk
   NetworkX   -> knowledge graph entitas (opsional, buat multi-hop)
-
-Layer ini dipakai OLEH DUA skenario: Standard RAG (baseline) dan
-VERIFIED. Bedanya bukan di sini — bedanya ada di Layer 2-4.
-Ini penting supaya klaim isolasi variabel lo valid.
 """
 
 from __future__ import annotations
@@ -27,10 +20,8 @@ from langchain_core.embeddings import Embeddings
 
 from config import RETRIEVAL, get_api_key
 
-
 # ----------------------------------------------------------
 # Struktur data internal
-# ----------------------------------------------------------
 @dataclass
 class Chunk:
     """
@@ -138,12 +129,17 @@ class RetrievalLayer:
         chunks = r.search("arus kas operasi", top_k=8)
     """
 
-    def __init__(self, pdf_path: str, embedding_provider: str = "voyage"):
+    def __init__(self, pdf_path: str, embedding_provider: str = "voyage",
+                 index_dir: Optional[str] = None):
         self.pdf_path = pdf_path
         self.doc_id = os.path.splitext(os.path.basename(pdf_path))[0]
         self.embeddings = get_embeddings(embedding_provider)
         self.vectorstore = None
         self.chunks: List[Chunk] = []
+        # Default: RETRIEVAL.index_dir (dipakai runner.py, cache batch yg
+        # sengaja persisten). app.py Streamlit meng-override ini dgn folder
+        # temp per-session supaya index tidak numpuk permanen di server.
+        self.index_dir = index_dir or RETRIEVAL.index_dir
 
     # ---------- ingest ----------
     def load_and_split(self) -> List[Chunk]:
@@ -177,7 +173,7 @@ class RetrievalLayer:
         """Bangun index. Kalau sudah ada di disk, load saja (hemat kredit)."""
         from langchain_community.vectorstores import FAISS
 
-        index_path = os.path.join(RETRIEVAL.index_dir, self.doc_id)
+        index_path = os.path.join(self.index_dir, self.doc_id)
         meta_path = index_path + "_chunks.pkl"
 
         if not force_rebuild and os.path.exists(meta_path):
@@ -189,7 +185,7 @@ class RetrievalLayer:
             return self
 
         self.load_and_split()
-        os.makedirs(RETRIEVAL.index_dir, exist_ok=True)
+        os.makedirs(self.index_dir, exist_ok=True)
 
         self.vectorstore = FAISS.from_texts(
             texts=[c.text for c in self.chunks],

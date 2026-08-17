@@ -50,9 +50,7 @@ NUMBER_RX = re.compile(
 )
 
 # Konsekuensi dari melonggarkan lookbehind: penanda sitasi [DOC::c0012]
-# ikut terbaca sebagai angka "0012". Jadi sitasi harus dibuang dulu.
-# Sitasi itu metadata, bukan klaim faktual — kalau ikut dihitung,
-# hallucination rate lo jadi kotor.
+# hallucination rate jadi kotor.
 CITATION_RX = re.compile(r"\[([^\[\]]+?)::c(\d+)\]")
 
 
@@ -63,8 +61,7 @@ def parse_id_number(raw: str, unit: str = "") -> Optional[float]:
       '4,7' + 'triliun'   -> 4.7e12
       '12,5' (%)          -> 12.5
 
-    Ambiguitas yang perlu lo sadari: '1.234' bisa berarti seribu dua
-    ratus tiga puluh empat (Indonesia) ATAU 1,234 desimal (Inggris).
+    '1.234' bisa berarti seribu dua ratus tiga puluh empat (Indonesia) ATAU 1,234 desimal (Inggris).
     
     Laporan IDX konsisten pakai konvensi Indonesia
     """
