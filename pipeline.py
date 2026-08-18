@@ -3,13 +3,9 @@ pipeline.py — Perakitan seluruh layer + 3 skenario eksperimen.
 
 Tiga skenario tesis, dibedakan HANYA oleh layer yang aktif:
 
-  vanilla       -> tanpa retrieval. Murni parametric memory.
+  vanilla       -> tanpa retrieval. Murni based ondata  training model
   standard_rag  -> Layer 1 saja. Top-k mentah, langsung ke model.
   verified      -> Layer 1 + 2 + 3 + 4.
-
-Ketiganya berbagi kelas dasar dan prompt generator yang sama, jadi
-selisih hasil benar-benar berasal dari layer — bukan dari perbedaan
-kata-kata prompt. Isolasi variabel ini yang akan ditanya penguji.
 """
 
 from __future__ import annotations
@@ -22,7 +18,7 @@ from config import CONTEXT, MODEL
 from layer1_retrieval import Chunk, KnowledgeGraph, RetrievalLayer
 from layer2_context import ConversationBuffer, build_context, tag_chunks, tag_query
 from layer3_verification import numerical_gate, run_debate
-from layer4_sociotechnical import human_judgement_trigger
+from human_review import human_judgement_trigger
 from llm import LLMClient, TokenLedger
 
 
@@ -97,15 +93,10 @@ class PipelineResult:
 # Skenario 1 — Vanilla LLM
 # ==========================================================
 class VanillaPipeline:
+    """Baseline terlemah karena tanpa dokumen sama sekali.
+    Membuktikan bahwa jawaban lain memang datang dari retrieval, bukan dari model yang
+    kebetulan hafal data latihannya
     """
-    Baseline terlemah: tanpa dokumen sama sekali.
-
-    Nilainya justru di situ. Ini yang membuktikan bahwa jawaban
-    skenario lain memang datang dari retrieval, bukan dari model yang
-    kebetulan hafal BBCA dari data latihnya. Halusinasi di sini
-    diharapkan tinggi — itu memang hasil yang lo cari.
-    """
-
     scenario = "vanilla"
 
     def __init__(self, llm: Optional[LLMClient] = None):
@@ -134,17 +125,11 @@ class VanillaPipeline:
 
 # ==========================================================
 # Skenario 2 — Standard RAG
-# ==========================================================
 class StandardRAGPipeline:
     """
-    Baseline yang benar-benar kompetitif: Layer 1 saja.
-
-    Sengaja TIDAK dilemahkan. Kalau baseline lo dibuat jelek, kemenangan
-    VERIFIED jadi tidak berarti. Prompt grounding-nya sama persis,
-    top-k-nya wajar. Bedanya cuma: tidak ada tagging, tidak ada budget
+    Baseline yang biasa digunakan user. Tetapi tidak ada tagging, tidak ada budget
     kontekstual, tidak ada critique, tidak ada trigger manusia.
     """
-
     scenario = "standard_rag"
 
     def __init__(self, retriever: RetrievalLayer, llm: Optional[LLMClient] = None):
@@ -186,18 +171,9 @@ class StandardRAGPipeline:
 
 # ==========================================================
 # Skenario 3 — VERIFIED
-# ==========================================================
 class VerifiedPipeline:
     """
-    Pipeline lengkap 4 layer.
-
-    Alur: prefetch banyak -> Layer 2 memangkas cerdas -> generate ->
-    Layer 3 verifikasi -> Layer 4 putuskan perlu manusia atau tidak.
-
-    Perhatikan prefetch: ambil 20 chunk, kirim 6. Standard RAG ambil 8,
-    kirim 8. Jadi VERIFIED punya recall lebih luas TAPI token lebih
-    hemat. Itu justru inti H3 — dan sering bikin orang salah paham
-    bahwa "lebih banyak layer = pasti lebih mahal".
+    Pipeline lengkap framework yang diusulkan.
     """
 
     scenario = "verified"
@@ -298,14 +274,8 @@ class VerifiedPipeline:
 # ==========================================================
 def extract_citations(answer: str) -> List[str]:
     """
-    Tarik semua [chunk_id] dari jawaban -> bukti terukur untuk H4.
-
-    Jumlah sitasi valid per jawaban itu metrik traceability lo, dan
+    Tarik semua [chunk_id] dari jawaban -> Jawaban menggunakan metrik traceability, dan
     lebih meyakinkan daripada klaim kualitatif "output bisa ditelusuri".
-
-    Regex universal: doc_id boleh berisi spasi/titik/dll (mis.
-    "27. FS PGEO 2025::c0542"). Dua grup (doc_id, nomor) direkonstruksi
-    jadi chunk_id utuh sesuai kunci di chunk_lookup.
     """
     import re
     return sorted(set(

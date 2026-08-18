@@ -1,17 +1,16 @@
 # VERIFIED Framework
 
 Implementasi framework VERIFIED — sociotechnical context engineering melalui confidence score
-untuk mengurangi halusinasi AI pada analisis laporan keuangan tahunan IDX30 Periode 1 Agustus - 31 Oktober 2026.
+untuk mengurangi halusinasi AI pada analisis laporan keuangan tahunan IDX30.
 ---
 
 ## Peta file → layer tesis
-| File                      | Isi                                                                               |
-| `config.py`               | Configurasi Parameter yang bisa diset ulang                                       |
-| `llm.py`                  | Wrapper Anthropic + token ledger (formula `Cost(s)`)                              |
-| `layer1_retrieval.py`     | RAG menggunakan LangChain, Embedding Voyage, Knowledge Graph NetworkX, FAISS      |
+| `config.py`               | Configurasi Parameter yang bisa diset ulang
+| `llm.py`                  | Wrapper Anthropic + token ledger (formula `Cost 
+| `layer1_retrieval.py`     | RAG menggunakan LangChain, Embedding Voyage, Knowledge Graph, NetworkX, FAISS      |
 | `layer2_context.py`       | Context management melalui Regex tagging, untuk antitesa lost-in-the-middle       |
 | `layer3_verification.py`  | Numerical gate + DEBATE (Scorer/Critic/Commander)                                 |
-| `layer4_sociotechnical.py`| *Human judgement trigger* (risk × confidence)                                     |
+| `human_review.py`         | *Human judgement trigger* (risk × confidence)                                     |
 | `pipeline.py`             | Perakitan + 3 skenario eksperimen                                                 |
 | `runner.py`               | Batch runner 30 emiten × 3 skenario × 8 soal                                      |
 | `evaluation.py`           | HR, token, traceability, RAGAS                                                    |
@@ -45,7 +44,7 @@ streamlit run app.py                                       # artefak interaktif
 ```
 PDF → [L1] chunk + embed + FAISS ──┐
                                    ├─→ prefetch 20 chunk
-      [L2] tag → rerank → reorder → 6 chunk
+      [L2] tag → rerank → reorder → chunks
                                    ↓
                             generate draft
                                    ↓
@@ -81,16 +80,3 @@ Untuk reliabilitas anotasi, idealnya ada 2 annotator pada subset (misal 20%) lal
 | `reorder_lost_in_the_middle = False` | Kontribusi anti-LITM |
 | `embedding_provider = "local"` | Kontribusi embedding domain-finance |
 
-Lima baris tabel di Bab 4, tiap baris satu run. Ini yang mengubah klaim "VERIFIED bekerja" jadi "ini bagian mana yang bekerja" — jauh lebih kuat.
----
-
-## Estimasi biaya
-Per pertanyaan mode VERIFIED: ~4 panggilan LLM (generate + scorer + critic + commander), sekitar 8–15k token total.
-| Cakupan | Perkiraan |
-|---|---|
-| 1 emiten × 8 soal × 3 skenario | ~$0,40 |
-| 30 emiten (full) | ~$12 |
-| + embedding Voyage 30 PDF | ~$2–4 |
-| + RAGAS evaluation | ~$5–8 |
-
-Kasar dan tergantung panjang PDF, tapi ordenya puluhan dolar, bukan ratusan. Index FAISS di-cache ke disk, jadi run ulang tidak membayar embedding dua kali.

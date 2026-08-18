@@ -6,6 +6,7 @@ voyageai>=0.3             # embedding (Anthropic tidak punya embedding model sen
 
 # ---- LangChain (Layer 1) ----
 langchain>=0.3.0
+langchain-core>=0.3.0
 langchain-community>=0.3.0
 langchain-text-splitters>=0.3.0
 pypdf>=5.0.0               # dipakai PyPDFLoader
@@ -22,5 +23,5 @@ streamlit>=1.40.0
 # ---- Opsional ----
 # ragas>=0.2.0             # context precision & recall
 # datasets>=3.0.0          # dependensi ragas
-# sentence-transformers>=3.0.0   # embedding lokal gratis (fallback / ablation)
+sentence-transformers>=3.0.0   # embedding lokal gratis (fallback / ablation)
 # matplotlib>=3.9.0        # grafik untuk Bab 4

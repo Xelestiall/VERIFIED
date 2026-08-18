@@ -10,8 +10,7 @@ menjejalkan top-k chunk apa adanya. Layer ini melakukan 4 hal:
   4. REORDERING  — taruh chunk terbaik di awal & akhir (lawan
                    lost-in-the-middle, Liu et al., 2024)
 
-Tiap fungsi bisa dimatikan satu-satu lewat config -> ini yang bikin
-lo bisa bikin tabel ablation study yang rapi di Bab 4.
+Tiap fungsi bisa dimatikan satu-satu lewat config
 """
 
 from __future__ import annotations
@@ -23,14 +22,10 @@ from typing import Dict, List, Tuple
 from config import CONTEXT, REGEX_TAGS
 from layer1_retrieval import Chunk
 
-
-# Compile sekali di import. Compile per-panggilan pada 200 chunk x 8
-# pertanyaan x 30 emiten = pemborosan CPU yang nggak perlu.
 COMPILED_TAGS: Dict[str, re.Pattern] = {
     name: re.compile(pattern, re.IGNORECASE)
     for name, pattern in REGEX_TAGS.items()
 }
-
 
 # ----------------------------------------------------------
 # 1. Tagging
@@ -49,11 +44,7 @@ def tag_chunks(chunks: List[Chunk]) -> List[Chunk]:
 
 def tag_query(query: str) -> List[str]:
     """
-    Tag untuk pertanyaan.
-
-    Query itu pendek, jadi regex sering nggak nyantol. Karena itu ada
-    lapisan kedua: kata kunci intent -> tag. Contoh: kata "berapa"
-    sinyal bahwa jawabannya HARUS mengandung angka, jadi chunk
+    Contoh: kata "berapa" sinyal bahwa jawabannya HARUS mengandung angka, jadi chunk
     ber-tag CURRENCY/NUMBER pantas diprioritaskan.
     """
     tags = set(tag_text(query))
@@ -81,7 +72,7 @@ def tag_query(query: str) -> List[str]:
 # 2. Reranking
 # ----------------------------------------------------------
 def tag_overlap_score(chunk_tags: List[str], query_tags: List[str]) -> float:
-    """Jaccard-ish: berapa banyak tag query yang tertutup oleh chunk."""
+    """Jumlah tag query yang tertutup oleh chunk."""
     if not query_tags:
         return 0.0
     return len(set(chunk_tags) & set(query_tags)) / len(set(query_tags))
@@ -103,12 +94,10 @@ def rerank(chunks: List[Chunk], query_tags: List[str]) -> List[Chunk]:
 
 
 # ----------------------------------------------------------
-# 3 & 4. Budgeting + reordering
-# ----------------------------------------------------------
+# Budgeting + reordering
 def estimate_tokens(text: str) -> int:
     """Estimasi cepat. Untuk angka final di tesis, pakai ledger dari API."""
     return int(len(text) / CONTEXT.chars_per_token)
-
 
 def apply_budget(chunks: List[Chunk]) -> List[Chunk]:
     """Ambil chunk dari skor tertinggi sampai budget token habis."""
@@ -128,10 +117,8 @@ def apply_budget(chunks: List[Chunk]) -> List[Chunk]:
 def reorder_against_lost_in_the_middle(chunks: List[Chunk]) -> List[Chunk]:
     """
     Susun ulang: [terbaik, ke-3, ke-5, ..., ke-6, ke-4, ke-2].
-
-    Efeknya chunk paling relevan mendarat di posisi awal DAN akhir
-    context — dua posisi yang menurut Liu et al. (2024) paling
-    diperhatikan model. Yang lemah dibuang ke tengah.
+    Efeknya chunk paling relevan mendarat di posisi awal DAN akhir,
+    Yang lemah dibuang ke tengah.
     """
     if not CONTEXT.reorder_lost_in_the_middle or len(chunks) < 3:
         return chunks
@@ -143,14 +130,10 @@ def reorder_against_lost_in_the_middle(chunks: List[Chunk]) -> List[Chunk]:
 
 # ----------------------------------------------------------
 # Buffer percakapan
-# ----------------------------------------------------------
+
 @dataclass
 class ConversationBuffer:
     """
-    |s.b| dalam formula Cost(s) — dan sumber context bloat paling
-    diam-diam. Tanpa pemangkasan, sesi 20 giliran = riwayat 20 giliran
-    ikut dikirim tiap kali.
-
     Buffer ini SENGAJA tidak dibatasi jumlah turn: tujuan eksperimen
     adalah menguji kemampuan context tak terbatas yang dikelola lewat
     KG retrieval (Layer 1) + context engineering (Layer 2), bukan lewat
@@ -159,9 +142,8 @@ class ConversationBuffer:
     """
     turns: List[Tuple[str, str]] = field(default_factory=list)
 
+# Tanpa batas turn: uji kemampuan context tak terbatas via KG retrieval + context engineering 
     def add(self, question: str, answer: str) -> None:
-        # Tanpa batas turn: uji kemampuan context tak terbatas via KG retrieval
-        # + context engineering (bukan pemangkasan riwayat).
         self.turns.append((question, answer))
 
     def render(self, max_chars_per_turn: int = 300) -> str:
@@ -179,10 +161,9 @@ class ConversationBuffer:
 
 # ----------------------------------------------------------
 # Orkestrasi layer
-# ----------------------------------------------------------
 @dataclass
 class ManagedContext:
-    """Output Layer 2 — inilah yang benar-benar dikirim ke model."""
+    """Output Layer 2, inilah yang benar-benar dikirim ke model:"""
     text: str
     chunks: List[Chunk]
     query_tags: List[str]
@@ -198,9 +179,8 @@ def build_context(
 ) -> ManagedContext:
     """
     Pipeline Layer 2 lengkap: tag -> rerank -> budget -> reorder -> render.
-
-    Format render sengaja pakai blok <SUMBER id=...> supaya model punya
-    handle eksplisit untuk menyitir. Tanpa ID yang bisa dikutip,
+    Format render sengaja pakai blok <SUMBER id=...> supaya punya handler
+    eksplisit untuk menyitir. Tanpa ID yang bisa dikutip,
     traceability (H4) cuma jadi klaim, bukan sesuatu yang bisa diukur.
     """
     tagged = tag_chunks(chunks)

@@ -1,8 +1,5 @@
 """
 layer3_verification.py — LAYER 3: VERIFICATION
-
-Dua gate berurutan:
-
   A. NUMERICAL VERIFICATION GATE (deterministik, tanpa LLM)
      Setiap angka di jawaban wajib ada di chunk sumber. Ini gate
      berbasis aturan, bukan LLM — jadi tidak bisa ikut berhalusinasi.
@@ -12,11 +9,6 @@ Dua gate berurutan:
      Scorer    -> nilai jawaban awal, keluarkan confidence
      Critic    -> peran devil's advocate, cari cacat secara agresif
      Commander -> putuskan revisi final + confidence final
-
-Kenapa urutannya numerik dulu? Karena hasil gate numerik jadi bukti
-konkret yang disodorkan ke Critic. Critic yang megang temuan spesifik
-("angka 4,7 triliun tidak ada di sumber manapun") jauh lebih tajam
-daripada Critic yang cuma disuruh "kritik jawaban ini".
 """
 
 from __future__ import annotations
@@ -28,41 +20,30 @@ from typing import Any, Callable, Dict, List, Optional
 from config import MODEL, VERIFICATION
 from layer1_retrieval import Chunk
 
-
 # ==========================================================
 # A. NUMERICAL VERIFICATION GATE
-# ==========================================================
 MAGNITUDE = {
     "ribu": 1e3, "juta": 1e6, "miliar": 1e9, "milyar": 1e9,
     "triliun": 1e12, "trilyun": 1e12,
     "k": 1e3, "mn": 1e6, "bn": 1e9, "tn": 1e12,
 }
 
-# Angka + satuan opsional. Format Indonesia: titik = ribuan, koma = desimal.
-#
-# Lookbehind (?<![\d.,]) sengaja HANYA memblokir digit dan pemisah, bukan
-# huruf. Kalau huruf ikut diblokir, "Rp4,7 triliun" tidak akan pernah
-# terdeteksi — dan justru itu bentuk penulisan paling umum di laporan IDX.
+
 NUMBER_RX = re.compile(
     r"(?<![\d.,])(\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+(?:,\d+)?|\d+(?:\.\d+)?)"
     r"\s*(ribu|juta|miliar|milyar|triliun|trilyun|k|mn|bn|tn|%)?",
     re.IGNORECASE,
 )
 
-# Konsekuensi dari melonggarkan lookbehind: penanda sitasi [DOC::c0012]
-# hallucination rate jadi kotor.
+# Konsekuensi dari melonggarkan lookbehind, hallucination rate jadi kotor.
 CITATION_RX = re.compile(r"\[([^\[\]]+?)::c(\d+)\]")
 
-
 def parse_id_number(raw: str, unit: str = "") -> Optional[float]:
-    """
-    Ubah string angka gaya Indonesia jadi float.
+    """Ubah string angka gaya Indonesia jadi float.
       '1.234.567,89'      -> 1234567.89
       '4,7' + 'triliun'   -> 4.7e12
       '12,5' (%)          -> 12.5
-
-    '1.234' bisa berarti seribu dua ratus tiga puluh empat (Indonesia) ATAU 1,234 desimal (Inggris).
-    
+      '1.234' bisa berarti seribu dua ratus tiga puluh empat (Indonesia) ATAU 1,234 desimal (Inggris).    
     Laporan IDX konsisten pakai konvensi Indonesia
     """
     s = raw.strip()
@@ -95,10 +76,7 @@ def extract_numbers(text: str) -> List[Dict[str, Any]]:
         out.append({
             "raw": m.group(0).strip(),
             "value": val,
-            "is_percent": unit == "%",
-            # Tahun bukan klaim finansial — jangan sampai '2025' bikin
-            # jawaban benar ditandai halusinasi.
-            "is_year": 1900 <= val <= 2100 and float(val).is_integer() and not unit,
+            "is_percent": unit == "%"
         })
     return out
 
@@ -108,7 +86,6 @@ class NumericalGateResult:
     total_numbers: int
     verified_numbers: int
     unsupported: List[Dict[str, Any]] = field(default_factory=list)
-    penalty: float = 0.0
 
     @property
     def support_ratio(self) -> float:
@@ -117,9 +94,8 @@ class NumericalGateResult:
 def numerical_gate(answer: str, chunks: List[Chunk]) -> NumericalGateResult:
     """
     Cocokkan tiap angka di jawaban dengan angka di chunk sumber.
-
     Pencocokan pakai NILAI, bukan string — supaya 'Rp4,7 triliun' di
-    jawaban tetap match dengan '4.700.000' di tabel sumber.
+    jawaban tetap match dengan '4.700.000.000' di tabel sumber.
     """
     if not VERIFICATION.enable_numerical_gate:
         return NumericalGateResult(passed=True, total_numbers=0, verified_numbers=0)
@@ -147,13 +123,11 @@ def numerical_gate(answer: str, chunks: List[Chunk]) -> NumericalGateResult:
     # Penalti deterministik DINONAKTIFKAN (permintaan): confidence murni dari
     # penilaian Scorer/Commander atas sumber tersitasi, bukan potongan mekanis
     # per angka. Gate tetap menghitung `unsupported` untuk laporan & Layer 4.
-    penalty = 0.0
     return NumericalGateResult(
         passed=len(unsupported) == 0,
         total_numbers=len(answer_numbers),
         verified_numbers=verified,
-        unsupported=unsupported,
-        penalty=penalty,
+        unsupported=unsupported
     )
 
 
@@ -180,6 +154,7 @@ Prinsip: lebih baik mengatakan "tidak ditemukan dalam dokumen" daripada menebak.
 
 
 @dataclass
+
 class DebateResult:
     final_answer: str
     confidence: float
@@ -187,8 +162,7 @@ class DebateResult:
     critic_issues: List[str] = field(default_factory=list)
     revised: bool = False
     rounds: int = 0
-    verdict: str = "kept"  # kept | revised | not_answerable
-
+    verdict: str = "kept"
 
 def run_debate(
     llm: Any,
@@ -202,8 +176,8 @@ def run_debate(
     if not VERIFICATION.enable_adversarial_critique:
         return DebateResult(
             final_answer=draft_answer,
-            confidence=max(0.0, 1.0 - gate.penalty),
-            verdict="kept",
+            confidence=max(0.0, 1.0),
+            verdict = "kept",
         )
 
     answer = draft_answer
@@ -250,13 +224,10 @@ def run_debate(
         if on_step:
             on_step("critic", None)
         critique = llm.complete_json(
-            f"PERTANYAAN:\n{question}\n\n"
-            f"SUMBER:\n{context}\n\n"
-            f"JAWABAN YANG DISERANG:\n{answer}\n\n"
-            f"TEMUAN GATE NUMERIK:\n{gate_report}\n\n"
-            'Serang jawaban ini. Format: {"issues":["..."],'
-            '"severity":"none|low|medium|high",'
-            '"suggested_fix":"kosongkan jika tidak perlu revisi"}',
+            f"Question: \n{question}\n\n"
+            f"Context: \n{context}\n\n"
+            f"Answer: \n{answer}\n\n"
+            '{"issues":["..."],' '"severity":"none|low|medium|high",',
             system=CRITIC_SYSTEM,
             model=MODEL.critic_model,
             stage="critic",
@@ -273,7 +244,6 @@ def run_debate(
             })
 
         # Kalau Critic tidak menemukan apa-apa dan gate lolos, berhenti.
-        # Menghemat 1 call per pertanyaan tanpa mengorbankan kualitas.
         if severity in ("none", "low") and gate.passed:
             break
 
@@ -281,15 +251,12 @@ def run_debate(
         if on_step:
             on_step("commander", None)
         decision = llm.complete_json(
-            f"PERTANYAAN:\n{question}\n\n"
-            f"SUMBER:\n{context}\n\n"
-            f"JAWABAN AWAL:\n{answer}\n\n"
-            f"PENILAIAN SCORER: confidence={scorer_conf}; "
-            f"{scored.get('reasoning','')}\n\n"
-            f"SERANGAN CRITIC ({severity}): {round_issues}\n"
-            f"SARAN PERBAIKAN: {critique.get('suggested_fix','')}\n\n"
-            "Putuskan jawaban final. Pertahankan semua sitasi [chunk_id] yang valid. "
-            "Buang klaim yang tidak didukung sumber.\n"
+            f"Question:\n{question}\n\n"
+            f"Context:\n{context}\n\n"
+            f"Answer:\n{answer}\n\n"
+            f"Confidence={scorer_conf}; {scored.get('reasoning','')}\n\n"
+            f"Critic ({severity}): {round_issues}\n"
+            f"Fix: {critique.get('suggested_fix','')}\n\n"
             'Format: {"final_answer":"...","confidence":0.0-1.0,'
             '"verdict":"kept|revised|not_answerable"}',
             system=COMMANDER_SYSTEM,
@@ -311,10 +278,8 @@ def run_debate(
                 "suggested_fix": critique.get("suggested_fix", ""),
             })
 
-    # Confidence final = penilaian model DIKURANGI penalti deterministik.
-    # Sengaja begini: penalti berbasis aturan tidak bisa dinegosiasikan
-    # oleh model yang terlalu percaya diri pada dirinya sendiri.
-    confidence = max(0.0, min(1.0, scorer_conf - gate.penalty))
+    # Confidence Score final
+    confidence = max(0.0, min(1.0, scorer_conf))
 
     return DebateResult(
         final_answer=answer,
