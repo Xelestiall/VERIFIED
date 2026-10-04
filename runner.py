@@ -1,7 +1,7 @@
 """
 runner.py — Eksekutor eksperimen batch.
 
-Menjalankan: 30 dokumen x 3 skenario x 8 pertanyaan -> satu CSV.
+Menjalankan: 30 dokumen x 3 skenario x 10 pertanyaan -> satu CSV.
 Runner harus dikasih limit, biar ga kena RTO
 Pakai:
     python runner.py --pdf-dir ./data/pdf --limit 3
@@ -57,6 +57,19 @@ class ResultLogger:
         with open(self.path, "a", newline="", encoding="utf-8") as f:
             csv.DictWriter(f, fieldnames=CSV_FIELDS).writerow(clean)
 
+    def write_build_cost(self, doc_id: str, stage: str, snap: Dict[str, Any]) -> None:
+        """Biaya sekali-bangun (KG, dsb.) di luar biaya per-respons -> results/build_costs.csv."""
+        path = os.path.join(os.path.dirname(self.path) or ".", "build_costs.csv")
+        new = not os.path.exists(path)
+        with open(path, "a", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=["doc_id", "stage", "input_tokens",
+                                               "output_tokens", "llm_calls", "cost_usd"])
+            if new:
+                w.writeheader()
+            w.writerow({"doc_id": doc_id, "stage": stage,
+                        "input_tokens": snap["input_tokens"], "output_tokens": snap["output_tokens"],
+                        "llm_calls": snap["llm_calls"], "cost_usd": snap["cost_usd"]})
+
     def completed_keys(self) -> Set[str]:
         """Kunci run yang sudah selesai -> dipakai untuk --resume."""
         if not os.path.exists(self.path):
@@ -80,12 +93,17 @@ class ExperimentRunner:
         embedding_provider: str = "voyage",
         enable_kg: bool = False,
         logger: Optional[ResultLogger] = None,
+        session_buffer: bool = False,
     ):
         self.pdf_paths = pdf_paths
         self.scenarios = scenarios or SCENARIOS
         self.questions = questions or EVAL_QUESTIONS
         self.embedding_provider = embedding_provider
         self.enable_kg = enable_kg
+        # False (default) = tiap pertanyaan INDEPENDEN, sesuai Bab 3 tesis.
+        # True = riwayat Q1..Qn menumpuk di konteks VERIFIED (uji sesi panjang/H3);
+        # hanya adil jika baseline diberi perlakuan yang sama -- lihat README.
+        self.session_buffer = session_buffer
         self.logger = logger or ResultLogger()
         self.llm = LLMClient(ledger=TokenLedger())
 
@@ -113,6 +131,10 @@ class ExperimentRunner:
             kg = KnowledgeGraph()
             kg.extract_from_chunks(retriever.chunks, self.llm)
             print(f"  [Layer 1] Graf: {kg.stats()}")
+            # Biaya KG sebelumnya HILANG: ledger di-reset di awal setiap pipeline.run().
+            # Catat terpisah, lalu laporkan sebagai biaya pembangunan (amortisasi di Bab 4).
+            self.logger.write_build_cost(doc_id, "kg_extraction", self.llm.ledger.snapshot())
+            self.llm.ledger.reset()
 
         for scenario in self.scenarios:
             kwargs: Dict[str, Any] = {}
@@ -132,6 +154,7 @@ class ExperimentRunner:
                         question_risk=q.get("risk", "medium"),
                         doc_id=doc_id,
                         company_hint=doc_id if scenario == "vanilla" else "",
+                        use_buffer=self.session_buffer,
                     )
                     res.doc_id = doc_id
                     self.logger.write(res)
@@ -143,7 +166,7 @@ class ExperimentRunner:
                         f"unsup={res.numbers_unsupported}"
                     )
                 except Exception as e:  # noqa: BLE001
-                    # Satu pertanyaan gagal tidak boleh membunuh run 720 respons.
+                    # Satu pertanyaan gagal tidak boleh membunuh run 900 respons.
                     print(f"  [ERROR] {key}: {e}")
                     traceback.print_exc(limit=1)
         return results
@@ -195,6 +218,8 @@ def main() -> None:
     p.add_argument("--limit", type=int, help="batasi jumlah dokumen (buat pilot)")
     p.add_argument("--embedding", default="voyage", choices=["voyage", "local"])
     p.add_argument("--enable-kg", action="store_true")
+    p.add_argument("--session-buffer", action="store_true",
+                   help="biarkan riwayat Q1..Qn menumpuk di konteks VERIFIED (default: tiap soal independen)")
     p.add_argument("--resume", action="store_true", help="lewati yang sudah ada di CSV")
     p.add_argument("--out", default=LOG_FILE)
     args = p.parse_args()
@@ -229,6 +254,7 @@ def main() -> None:
     ExperimentRunner(
         pdf_paths=paths, scenarios=args.scenarios, questions=questions,
         embedding_provider=args.embedding, enable_kg=args.enable_kg,
+        session_buffer=args.session_buffer,
         logger=ResultLogger(args.out),
     ).run_all(resume=args.resume)
 

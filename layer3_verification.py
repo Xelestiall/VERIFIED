@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from config import MODEL, VERIFICATION
 from layer1_retrieval import Chunk
@@ -30,10 +30,45 @@ MAGNITUDE = {
 
 
 NUMBER_RX = re.compile(
-    r"(?<![\d.,])(\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+(?:,\d+)?|\d+(?:\.\d+)?)"
-    r"\s*(ribu|juta|miliar|milyar|triliun|trilyun|k|mn|bn|tn|%)?",
+    # Urutan alternatif PENTING: format Inggris (koma = ribuan) dicoba lebih dulu.
+    # Beberapa laporan IDX30 (mis. BUMI, AADI pada catatan 'full amount') memakai
+    # "371,335,392,068" walau berbahasa Indonesia; tanpa ini terpotong jadi
+    # "371,335" dan "392,068" lalu dibaca sebagai desimal -> angka salah.
+    r"(?<![\d.,])(\d{1,3}(?:,\d{3}){2,}(?:\.\d+)?|\d{1,3},\d{3}\.\d+"
+    r"|\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+(?:,\d+)?|\d+(?:\.\d+)?)"
+    # (?![A-Za-z]) mencegah satuan menempel pada kata: "3 kali" bukan 3k, "5 tn" ok.
+    r"\s*(ribu|juta|miliar|milyar|triliun|trilyun|k|mn|bn|tn|%)?(?![A-Za-z])",
     re.IGNORECASE,
 )
+
+# Penomoran daftar ("1. ", "2) ", "- 3. ") di awal baris BUKAN angka keuangan.
+# Tanpa ini, jawaban berformat daftar menambah angka palsu ke penyebut gate.
+LIST_MARKER_RX = re.compile(r"(?m)^[ \t]*(?:[-*\u2022][ \t]*)?(?:\*\*)?\d{1,2}[.)](?=\s)")
+
+# Header satuan tabel laporan IDX: "dalam jutaan Rupiah" / "in millions of Rupiah".
+UNIT_HEADER_RX = re.compile(
+    r"\b(?:dalam|dinyatakan\s+dalam|disajikan\s+dalam|in|expressed\s+in|stated\s+in|presented\s+in)\s+"
+    r"(jutaan|juta|ribuan|ribu|miliaran|miliar|millions?|thousands?|billions?)\b",
+    re.IGNORECASE,
+)
+HEADER_SCALE = {
+    "jutaan": 1e6, "juta": 1e6, "million": 1e6, "millions": 1e6,
+    "ribuan": 1e3, "ribu": 1e3, "thousand": 1e3, "thousands": 1e3,
+    "miliaran": 1e9, "miliar": 1e9, "billion": 1e9, "billions": 1e9,
+}
+
+
+def detect_table_scale(text: str) -> float:
+    """Skala satuan tabel pada sebuah chunk (1.0 bila tidak ada header satuan).
+
+    Laporan keuangan IDX menyajikan angka tabel 'dalam jutaan Rupiah': sel
+    bernilai 3.301.470 artinya Rp3,3 triliun. Gate versi awal membandingkan
+    '3.301.470 juta' (=3,3e12) dengan 3.301.470 (=3,3e6) lalu menandainya
+    tak-terdukung -> SEMUA angka tabel jadi false positive dan Layer 4
+    mengeskalasi hampir setiap jawaban. Ini membetulkannya.
+    """
+    m = UNIT_HEADER_RX.search(text)
+    return HEADER_SCALE.get(m.group(1).lower(), 1.0) if m else 1.0
 
 # Konsekuensi dari melonggarkan lookbehind, hallucination rate jadi kotor.
 CITATION_RX = re.compile(r"\[([^\[\]]+?)::c(\d+)\]")
@@ -48,7 +83,9 @@ def parse_id_number(raw: str, unit: str = "") -> Optional[float]:
     """
     s = raw.strip()
     try:
-        if "," in s and "." in s:
+        if re.fullmatch(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?", s) and (s.count(",") >= 2 or "." in s):
+            value = float(s.replace(",", ""))   # format Inggris: koma = ribuan
+        elif "," in s and "." in s:
             value = float(s.replace(".", "").replace(",", "."))
         elif "," in s:
             value = float(s.replace(",", "."))
@@ -65,18 +102,42 @@ def parse_id_number(raw: str, unit: str = "") -> Optional[float]:
     return value
 
 def extract_numbers(text: str) -> List[Dict[str, Any]]:
-    """Ambil semua angka + nilai ternormalisasi dari sepotong teks."""
+    """Ambil semua angka + nilai ternormalisasi dari sepotong teks.
+
+    Field yang dikembalikan:
+      raw, value, is_percent,
+      is_year     -> 4 digit 1900-2100 tanpa satuan/pemisah ribuan (dikecualikan gate)
+      has_unit    -> ada satuan skala (juta/miliar/...) menempel pada angka
+      decimals    -> jumlah digit desimal yang DITAMPILKAN (dasar toleransi pembulatan)
+      unit_scale  -> pengali satuan (1.0 bila tanpa satuan)
+    """
     text = CITATION_RX.sub(" ", text)
+    text = LIST_MARKER_RX.sub(" ", text)
     out: List[Dict[str, Any]] = []
     for m in NUMBER_RX.finditer(text):
-        raw, unit = m.group(1), (m.group(2) or "")
-        val = parse_id_number(raw, "" if unit == "%" else unit)
+        num_str, unit = m.group(1), (m.group(2) or "")
+        val = parse_id_number(num_str, "" if unit == "%" else unit)
         if val is None:
             continue
+        u = unit.lower()
+        is_pct = u == "%"
+        has_unit = (not is_pct) and u in MAGNITUDE
+        is_year = (
+            not unit
+            and re.fullmatch(r"(?:19|20)\d{2}", num_str) is not None
+        )
+        if re.fullmatch(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?", num_str) and (num_str.count(",") >= 2 or "." in num_str):
+            decimals = len(num_str.split(".")[1]) if "." in num_str else 0   # format Inggris
+        else:
+            decimals = len(num_str.split(",")[1]) if "," in num_str else 0
         out.append({
             "raw": m.group(0).strip(),
             "value": val,
-            "is_percent": unit == "%"
+            "is_percent": is_pct,
+            "is_year": is_year,
+            "has_unit": has_unit,
+            "decimals": decimals,
+            "unit_scale": MAGNITUDE.get(u, 1.0) if has_unit else 1.0,
         })
     return out
 
@@ -91,28 +152,65 @@ class NumericalGateResult:
     def support_ratio(self) -> float:
         return self.verified_numbers / self.total_numbers if self.total_numbers else 1.0
 
-def numerical_gate(answer: str, chunks: List[Chunk]) -> NumericalGateResult:
+def _rounding_tolerance(n: Dict[str, Any]) -> float:
+    """Setengah satuan digit terakhir yang ditampilkan di jawaban.
+
+    'Rp3,3 triliun' menampilkan 1 desimal pada skala 1e12 -> ±0,05 triliun.
+    'Rp3.301.470 juta' menampilkan 0 desimal pada skala 1e6 -> ±0,5 juta.
+    Angka yang ditampilkan presisi tidak boleh lolos hanya karena 'dekat'
+    dengan angka lain di konteks.
+    """
+    return 0.5 * (10.0 ** -n["decimals"]) * n["unit_scale"]
+
+
+def numerical_gate(
+    answer: str,
+    chunks: List[Chunk],
+    extra_scales: Optional[Iterable[float]] = None,
+) -> NumericalGateResult:
     """
     Cocokkan tiap angka di jawaban dengan angka di chunk sumber.
-    Pencocokan pakai NILAI, bukan string — supaya 'Rp4,7 triliun' di
-    jawaban tetap match dengan '4.700.000.000' di tabel sumber.
+
+    Pencocokan memakai NILAI, bukan string, dan sadar-skala-tabel:
+      'Rp3,3 triliun' di jawaban cocok dengan sel '3.301.470' pada tabel
+      berheader 'dalam jutaan Rupiah'.
+    Toleransi = min(pembulatan-yang-ditampilkan, VERIFICATION.numeric_tolerance).
+    Jadi numeric_tolerance (1%) berfungsi sebagai BATAS ATAS, bukan toleransi
+    datar; angka presisi 7 digit tidak lolos hanya karena meleset 0,5%.
+
+    Catatan keterbatasan (tulis di Bab 5): gate memeriksa EKSISTENSI nilai di
+    konteks, bukan bahwa nilai itu milik akun yang ditanyakan. Jawaban yang
+    menukar 'laba bruto' dengan 'laba bersih' akan lolos. Selisih ini harus
+    ditangkap anotasi manusia, dan justru menjadi temuan tentang batas gate.
     """
     if not VERIFICATION.enable_numerical_gate:
         return NumericalGateResult(passed=True, total_numbers=0, verified_numbers=0)
 
-    source_numbers = []
+    # Header "dalam jutaan Rupiah" hanya muncul di chunk pembuka tabel; chunk
+    # badan tabel yang ikut terambil sering TIDAK memuatnya (pada KLBF: 136 dari
+    # 661 chunk berheader). Maka skala dikumpulkan dari seluruh chunk terambil
+    # DAN dari `extra_scales` (skala tingkat-dokumen, RetrievalLayer.table_scales()).
+    scales = {detect_table_scale(c.text) for c in chunks}
+    scales.update(extra_scales or [])
+    scales.discard(1.0)
+
+    source_numbers: List[float] = []
     for c in chunks:
-        source_numbers.extend(n["value"] for n in extract_numbers(c.text))
+        for n in extract_numbers(c.text):
+            source_numbers.append(n["value"])
+            # Sel tabel tanpa satuan eksplisit mewarisi skala header tabel.
+            if not n["has_unit"] and not n["is_percent"] and not n["is_year"]:
+                source_numbers.extend(n["value"] * sc for sc in scales)
 
     answer_numbers = [n for n in extract_numbers(answer) if not n["is_year"]]
-    tol = VERIFICATION.numeric_tolerance
+    cap = VERIFICATION.numeric_tolerance
 
     unsupported = []
     verified = 0
     for n in answer_numbers:
         val = n["value"]
         match = any(
-            abs(val - sv) <= tol * max(abs(val), abs(sv), 1.0)
+            abs(val - sv) <= min(_rounding_tolerance(n), cap * max(abs(val), abs(sv), 1.0))
             for sv in source_numbers
         )
         if match:
@@ -227,7 +325,8 @@ def run_debate(
             f"Question: \n{question}\n\n"
             f"Context: \n{context}\n\n"
             f"Answer: \n{answer}\n\n"
-            '{"issues":["..."],' '"severity":"none|low|medium|high",',
+            'Format: {"issues":["..."],"severity":"none|low|medium|high",'
+            '"suggested_fix":"..."}',
             system=CRITIC_SYSTEM,
             model=MODEL.critic_model,
             stage="critic",

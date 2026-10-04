@@ -153,7 +153,7 @@ class StandardRAGPipeline:
         # Gate numerik tetap DIHITUNG di sini, tapi tidak dipakai untuk
         # mengoreksi jawaban. Ini murni instrumen pengukuran, supaya
         # hallucination rate ketiga skenario diukur dengan alat yang sama.
-        gate = numerical_gate(answer, chunks)
+        gate = numerical_gate(answer, chunks, extra_scales=self.retriever.table_scales())
         snap = self.llm.ledger.snapshot()
 
         return PipelineResult(
@@ -227,13 +227,14 @@ class VerifiedPipeline:
         )
 
         # --- LAYER 3 ---
-        gate = numerical_gate(draft, managed.chunks)
+        gate = numerical_gate(draft, managed.chunks, extra_scales=self.retriever.table_scales())
         debate = run_debate(self.llm, question, draft, managed.text, gate, on_step=on_step)
 
         # Gate dijalankan ULANG pada jawaban final. Kalau tidak, jawaban
         # hasil revisi Commander bisa menyelipkan angka baru yang belum
         # pernah diperiksa siapa pun.
-        final_gate = numerical_gate(debate.final_answer, managed.chunks)
+        final_gate = numerical_gate(debate.final_answer, managed.chunks,
+                                    extra_scales=self.retriever.table_scales())
 
         # --- LAYER 4 ---
         trigger = human_judgement_trigger(

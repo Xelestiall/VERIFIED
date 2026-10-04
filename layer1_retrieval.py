@@ -200,6 +200,17 @@ class RetrievalLayer:
             pickle.dump(self.chunks, f)
         return self
 
+    def table_scales(self) -> set:
+        """Skala satuan tabel yang ditemukan di SELURUH dokumen (mis. {1e6}).
+
+        Dipakai gate numerik (Layer 3) karena header 'dalam jutaan Rupiah'
+        tidak selalu ikut terambil bersama chunk badan tabelnya.
+        """
+        if not hasattr(self, "_table_scales"):
+            from layer3_verification import detect_table_scale  # impor lazy: hindari siklus
+            self._table_scales = {detect_table_scale(c.text) for c in self.chunks} - {1.0}
+        return self._table_scales
+
     # ---------- search ----------
     def search(self, query: str, top_k: Optional[int] = None) -> List[Chunk]:
         """
@@ -241,9 +252,6 @@ class KnowledgeGraph:
     Kapan ini berguna: pertanyaan multi-hop seperti Q6 ("bisnis apa saja
     di bawah perusahaan ini") — jawabannya sering tersebar di beberapa
     halaman, dan vector search sendirian gampang miss.
-
-    Kapan skip: kalau waktu lo mepet. Graf ini enhancement, bukan
-    fondasi. Set enable_kg=False di pipeline dan semua tetap jalan.
     """
 
     def __init__(self):

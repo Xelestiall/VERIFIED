@@ -178,27 +178,43 @@ class SociotechnicalConfig:
 # ==========================================================
 # 7. EKSPERIMEN
 # ==========================================================
-# 8 pertanyaan dari Tabel 3.2 tesis (adopsi Spörer, 2025).
+# 10 pertanyaan dari Tabel 5 tesis (adopsi Spörer, 2025).
+# "risk" = label risiko tugas yang dipakai Layer 4 (human_review.assess_risk):
+#   low    -> deskriptif (segmen, bentuk hukum, anak perusahaan)
+#   medium -> interpretatif / campuran (metrik laba, arah arus kas, ESG, naik-turun)
+#   high   -> angka absolut atau forward-looking (revenue, dividen, target harga)
+# Label ini USULAN; ubah bila berbeda dari Tabel 5 dan samakan teks tesisnya.
+# Sebelumnya label ini tidak ada sehingga semua pertanyaan jatuh ke "medium".
 EVAL_QUESTIONS: List[Dict[str, str]] = [
     {"id": "Q1",
+     "risk": "medium",
      "text": "Metrik keuangan apa yang digunkan untuk mengukur laba perusahaan [nama perusahaan] di laporan keuangan tahun 2025?"},
     {"id": "Q2",
+     "risk": "medium",
      "text": "Bagaimana cashflow perusahaan [nama perusahaan] pada akhir buku tahun 2025, positif atau negatif?"},
     {"id": "Q3",
+     "risk": "high",
      "text": "Berapa revenue perusahaan [nama perusahaan] pada tahun 2025?"},
     {"id": "Q4",
+     "risk": "low",
      "text": "Apa segmen bisnis yang ada di laporan [nama perusahaan] tahun 2025?"},
     {"id": "Q5",
+     "risk": "low",
      "text": "Apa bentuk legal perusahaan [nama perusahaan] pada laporan keuangan tahun 2025?"},
     {"id": "Q6",
+     "risk": "low",
      "text": "Sebutkan anak perusahaan yang ada dibawah perusahaan [nama perusahaan] "},
     {"id": "Q7",
+     "risk": "high",
      "text": "Berapa nominal yang didistribusikan [nama perusahaan] bagi para pemegang saham atau investor pada tahun 2025?"},
     {"id": "Q8",
+     "risk": "medium",
      "text": "Bagaimana perusahaan [nama perusahaan] berkomitmen dalam partisipasi ESG (Environmental, Social, Governance) secara spesifik dalam laporan tahunan? Sertakan angka kuantitatif yang ditetapkan apabila ada"},
     {"id": "Q9",
+     "risk": "medium",
      "text": "Apakah revenue perusahaan [nama perusahaan] mengalami peningkatan atau penurunan dari tahun sebelumnya?"},
     {"id": "Q10",
+     "risk": "high",
      "text": "Sebutkan target harga saham [nama perusahaan] yang tertera pada laporan 2025"}
 ]
 

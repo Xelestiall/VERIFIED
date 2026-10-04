@@ -28,7 +28,20 @@ def load_results(csv_path: str) -> pd.DataFrame:
     for col in ["needs_human", "gate_passed", "revised"]:
         if col in df.columns:
             df[col] = df[col].astype(str).str.lower().isin(["true", "1", "yes"])
+    # doc_id tidak seragam antar skenario (vanilla: 'KLBF', runner: '22._FS_KLBF_2025').
+    # Semua join/pivot antar skenario harus memakai `ticker`, bukan doc_id.
+    df["ticker"] = df["doc_id"].map(ticker_from_doc_id)
     return df
+
+
+def ticker_from_doc_id(doc_id: Any) -> str:
+    """'22._FS_KLBF_2025' / '22. FS KLBF 2025' / 'KLBF' -> 'KLBF'."""
+    import re
+    s = str(doc_id)
+    m = re.search(r"FS[_ .]+([A-Z]{4})[_ .]+\d{4}", s)
+    if m:
+        return m.group(1)
+    return s if re.fullmatch(r"[A-Z]{4}", s) else s
 
 # ----------------------------------------------------------
 # Hallucination rate
@@ -225,6 +238,9 @@ class JudgeLogger:
 
 
 def load_chunk_lookup(doc_id: str) -> Dict[str, str]:
+    # CATATAN: `doc_id` di sini harus nama INDEX (prefix chunk_id sebelum '::',
+    # mis. '22. FS KLBF 2025'), BUKAN doc_id di run_log ('22._FS_KLBF_2025').
+    # Keduanya berbeda karena make_doc_id() mengganti spasi; lihat _context_for_row.
     """Baca teks chunk dari cache pickle Layer 1 (RETRIEVAL.index_dir).
 
     Sengaja TIDAK memanggil retriever.build() -- itu akan re-embed via
@@ -251,7 +267,11 @@ def _context_for_row(row: "pd.Series", cache: Dict[str, Dict[str, str]]) -> str:
     ids = [c.strip() for c in str(row.get("retrieved_chunks", "")).split(";") if c.strip()]
     if not ids:
         return ""
-    lookup = cache.setdefault(doc_id, load_chunk_lookup(doc_id))
+    # Nama file index = prefix chunk_id (RetrievalLayer.doc_id = nama file PDF apa adanya),
+    # sedangkan kolom doc_id di CSV sudah disanitasi make_doc_id(). Tanpa ini lookup
+    # selalu kosong dan judge post-hoc menilai SEMUA jawaban RAG/VERIFIED tanpa sumber.
+    index_name = ids[0].split("::")[0]
+    lookup = cache.setdefault(index_name, load_chunk_lookup(index_name))
     return "\n\n".join(
         f'<SUMBER id="{cid}">\n{lookup[cid]}\n</SUMBER>'
         for cid in ids if cid in lookup
