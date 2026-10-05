@@ -99,19 +99,27 @@ class VanillaPipeline:
     """
     scenario = "vanilla"
 
-    def __init__(self, llm: Optional[LLMClient] = None):
+    def __init__(self, llm: Optional[LLMClient] = None,
+                 buffer: Optional[ConversationBuffer] = None):
         self.llm = llm or LLMClient()
+        self.buffer = buffer or ConversationBuffer()
 
     def run(self, question: str, question_id: str = "", doc_id: str = "",
-            company_hint: str = "", **_: Any) -> PipelineResult:
+            company_hint: str = "", use_buffer: bool = False, **_: Any) -> PipelineResult:
         self.llm.ledger.reset()
         t0 = time.time()
 
         prompt = question
         if company_hint:
             prompt = f"Untuk perusahaan {company_hint}: {question}"
+        # Eksperimen sesi: baseline memakai ConversationBuffer YANG SAMA dengan
+        # VERIFIED (render() identik) supaya selisih hasil bukan karena riwayat.
+        if use_buffer and self.buffer.turns:
+            prompt = f"{self.buffer.render()}\n\n{prompt}"
 
         answer = self.llm.complete(prompt, system=BASE_SYSTEM, stage="generation")
+        if use_buffer:
+            self.buffer.add(question, answer)
         snap = self.llm.ledger.snapshot()
 
         return PipelineResult(
@@ -132,11 +140,14 @@ class StandardRAGPipeline:
     """
     scenario = "standard_rag"
 
-    def __init__(self, retriever: RetrievalLayer, llm: Optional[LLMClient] = None):
+    def __init__(self, retriever: RetrievalLayer, llm: Optional[LLMClient] = None,
+                 buffer: Optional[ConversationBuffer] = None):
         self.retriever = retriever
         self.llm = llm or LLMClient()
+        self.buffer = buffer or ConversationBuffer()
 
-    def run(self, question: str, question_id: str = "", **_: Any) -> PipelineResult:
+    def run(self, question: str, question_id: str = "", use_buffer: bool = False,
+            **_: Any) -> PipelineResult:
         self.llm.ledger.reset()
         t0 = time.time()
 
@@ -145,10 +156,16 @@ class StandardRAGPipeline:
             f'<SUMBER id="{c.chunk_id}" halaman="{c.page}">\n{c.text}\n</SUMBER>'
             for c in chunks
         )
+        # Posisi riwayat sama dengan VERIFIED (build_context): setelah blok sumber,
+        # sebelum PERTANYAAN. Riwayat TIDAK lewat Layer 2 (tanpa tagging/budget).
+        if use_buffer and self.buffer.turns:
+            context += f"\n\n{self.buffer.render()}"
         answer = self.llm.complete(
             f"SUMBER:\n{context}\n\nPERTANYAAN:\n{question}",
             system=GROUNDED_SYSTEM, stage="generation",
         )
+        if use_buffer:
+            self.buffer.add(question, answer)
 
         # Gate numerik tetap DIHITUNG di sini, tapi tidak dipakai untuk
         # mengoreksi jawaban. Ini murni instrumen pengukuran, supaya

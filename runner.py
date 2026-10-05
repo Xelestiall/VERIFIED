@@ -16,7 +16,12 @@ import os
 import traceback
 from typing import Any, Dict, List, Optional, Set
 
-from config import EVAL_QUESTIONS, LOG_FILE, RESULTS_DIR, SCENARIOS
+# Muat .env SEBELUM import config: config.py membaca API key saat import.
+# (app.py sudah melakukan ini; runner.py sebelumnya tidak, jadi key di .env tak terbaca.)
+from dotenv import load_dotenv
+load_dotenv()
+
+from config import EVAL_QUESTIONS, LOG_FILE, RESULTS_DIR, SCENARIOS  # noqa: E402
 from layer1_retrieval import RetrievalLayer
 from llm import LLMClient, TokenLedger
 from pipeline import PipelineResult, build_pipeline
@@ -101,8 +106,9 @@ class ExperimentRunner:
         self.embedding_provider = embedding_provider
         self.enable_kg = enable_kg
         # False (default) = tiap pertanyaan INDEPENDEN, sesuai Bab 3 tesis.
-        # True = riwayat Q1..Qn menumpuk di konteks VERIFIED (uji sesi panjang/H3);
-        # hanya adil jika baseline diberi perlakuan yang sama -- lihat README.
+        # True = riwayat Q1..Qn menumpuk di konteks SEMUA skenario (uji sesi panjang/H3);
+        # baseline memakai ConversationBuffer yang sama dengan VERIFIED. Simpan hasilnya
+        # ke CSV terpisah (--out results/run_log_session.csv), jangan dicampur run independen.
         self.session_buffer = session_buffer
         self.logger = logger or ResultLogger()
         self.llm = LLMClient(ledger=TokenLedger())
@@ -219,7 +225,8 @@ def main() -> None:
     p.add_argument("--embedding", default="voyage", choices=["voyage", "local"])
     p.add_argument("--enable-kg", action="store_true")
     p.add_argument("--session-buffer", action="store_true",
-                   help="biarkan riwayat Q1..Qn menumpuk di konteks VERIFIED (default: tiap soal independen)")
+                   help="riwayat Q1..Qn menumpuk di konteks SEMUA skenario (default: tiap soal independen); "
+                        "pakai bersama --out CSV terpisah")
     p.add_argument("--resume", action="store_true", help="lewati yang sudah ada di CSV")
     p.add_argument("--out", default=LOG_FILE)
     args = p.parse_args()
